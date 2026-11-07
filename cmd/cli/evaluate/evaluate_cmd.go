@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/audience"
+	"github.com/thomaspoignant/go-feature-flag/cmd/cli/audiencecmd"
 	"github.com/thomaspoignant/go-feature-flag/cmd/cli/helper"
 	rerr "github.com/thomaspoignant/go-feature-flag/cmdhelpers/err"
 	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/retrieverconf"
@@ -50,6 +53,7 @@ var (
 	evalFlag       string
 	evalCtx        string
 	checkMode      bool
+	evalAudiences  string
 )
 
 // nolint:funlen
@@ -154,7 +158,7 @@ evaluate --kind postgres --table my-table --column my-column:my-column-type --fl
 			if checkMode {
 				return runCheck(cmd, retrieverConf)
 			}
-			return runEvaluate(cmd, args, evalFlagFormat, retrieverConf, evalFlag, evalCtx)
+			return runEvaluate(cmd, args, evalFlagFormat, retrieverConf, evalFlag, evalCtx, evalAudiences)
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -198,6 +202,10 @@ evaluate --kind postgres --table my-table --column my-column:my-column-type --fl
 		"Name of the flag to evaluate, if empty we will return the evaluation of all the flags")
 	evaluateCmd.Flags().StringVar(&evalCtx,
 		"ctx", "{}", "Evaluation context in JSON format")
+	evaluateCmd.Flags().StringVar(&evalAudiences,
+		"audiences", "",
+		"Path to a YAML or JSON file with an `audiences:` block (relay proxy format), "+
+			"to resolve the audience() terms from the audience store (read-only)")
 	evaluateCmd.Flags().BoolVar(&checkMode,
 		"check-mode", false,
 		"Check only mode - when set, the command will not perform any evaluation and returns "+
@@ -238,7 +246,8 @@ func runEvaluate(
 	flagFormat string,
 	retrieverConf retrieverconf.RetrieverConf,
 	flag string,
-	ctx string) error {
+	ctx string,
+	audiencesFile string) error {
 	output := helper.Output{}
 
 	r, err := retrieverInit.InitRetriever(&retrieverConf)
@@ -256,7 +265,21 @@ func runEvaluate(
 		return err
 	}
 
+	var audiences *ffclient.AudiencesConfig
+	if audiencesFile != "" {
+		// connect first to fail with a clear error when the store is unreachable
+		// (ffclient only logs an Init failure); ffclient shuts the provider down.
+		sess, err := audiencecmd.Open(context.Background(), audiencesFile)
+		if err != nil {
+			return err
+		}
+		p := alreadyInitialized{Provider: sess.Provider}
+		conf := sess.Conf
+		audiences = &ffclient.AudiencesConfig{Provider: p, Config: conf.EffectiveConfig()}
+	}
+
 	e := evaluate{
+		audiences:     audiences,
 		retriever:     r,
 		fileFormat:    flagFormat,
 		flag:          flag,
@@ -345,3 +368,8 @@ func parsePostgresColumns() map[string]string {
 	}
 	return result
 }
+
+// alreadyInitialized is a provider that was initialized by the CLI: Init does nothing.
+type alreadyInitialized struct{ audience.Provider }
+
+func (alreadyInitialized) Init(context.Context, *fflog.FFLogger) error { return nil }

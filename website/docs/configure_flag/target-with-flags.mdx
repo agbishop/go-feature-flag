@@ -131,6 +131,10 @@ Check all the supported operations in the [JsonLogic documentation](http://jsonl
   {"and": [{"endsWith": [{"var": "ids"}, "@test.com"]}, {"==": [{"var": "role"}, "backend engineer"]}, {"==": [{"var": "environment"}, "pro"]}, {"==": [{"var": "company"}, "go-feature-flag"]}]}
   ```
 
+:::tip Large lists of users
+To target or exclude very large lists of users stored outside of the flag file, use the `audience()` query term. See [Audiences](./audiences) _(experimental)_.
+:::
+
 ## Environments
 
 When you initialise `go-feature-flag` you can set an **environment** for this GO Feature Flag instance.

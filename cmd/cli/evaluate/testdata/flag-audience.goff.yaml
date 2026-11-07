@@ -1,0 +1,11 @@
+aud-flag:
+  variations:
+    A: false
+    B: true
+  targeting:
+    - name: beta rule
+      query: targetingKey in audience("beta")
+      onError: skip
+      variation: B
+  defaultRule:
+    variation: A

@@ -28,6 +28,7 @@ During the initialization you must give a [`ffclient.Config{}`](https://pkg.go.d
 | `DisableNotifierOnInit`           | *(optional)* If **true**, the SDK will not call any notifier when the flags are loaded during initialization. This is useful if you do not want a Slack/Webhook notification saying that the flags have been added every time you start the application.<br/>Default: **false**                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `Offline`                         | *(optional)* If **true**, the SDK will not try to retrieve the flag file and will not export any data. No notifications will be sent either.<br/>Default: **false**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `EvaluationContextEnrichment`     | <p>*(optional)* It is a free `map[string]any` field that will be merged with the evaluation context sent during the evaluations. It is useful to add common attributes to all the evaluation, such as a server version, environment, ...</p><p>All those fields will be included in the custom attributes of the evaluation context.</p><p>_If in the evaluation context you have a field with the same name, it will be overridden by the `evaluationContextEnrichment`._</p><p>_If you have a key `env` in your `EvaluationContextEnrichment` and you also have the `Environment` set in your configuration, the `env` key from `EvaluationContextEnrichment` will be ignored._</p> Default: **nil** |
+| `Audiences` | *(optional, experimental)*<br/>Enables the `audience()` query term. See [Audiences in the Go module](#audiences) below.<br/>Default: **nil**  |
 | `PersistentFlagConfigurationFile` | *(optional)* If set GO Feature Flag will store the flags configuration in this file to be able to serve the flags even if none of the retrievers is available during starting time.<br/>By default, the flag configuration is not persisted and stays on the retriever system. By setting a file here, you ensure that GO Feature Flag will always start with a configuration but which can be out-dated.<br/><br/>_(example: `/tmp/goff_persist_conf.yaml`)_                                                                                                                                                                                                                                         |
 
 ## Example
@@ -101,3 +102,41 @@ You can do this by setting `Offline` mode in the client's Config.
 
 - [Export data from your flag variations](./data_collection)
 - [Be notified when your flags change](./notifier)
+
+## Audiences
+
+:::caution Experimental
+See [Audiences](../configure_flag/audiences) for the flag syntax and the [Redis data contract](../configure_flag/audiences-redis).
+:::
+
+```go
+import (
+    "time"
+
+    "github.com/redis/go-redis/v9"
+    ffclient "github.com/thomaspoignant/go-feature-flag"
+    "github.com/thomaspoignant/go-feature-flag/audience"
+    "github.com/thomaspoignant/go-feature-flag/audience/redisprovider"
+)
+
+err := ffclient.Init(ffclient.Config{
+    PollingInterval: 3 * time.Second,
+    Retriever:       &fileretriever.Retriever{Path: "flags.goff.yaml"},
+    Audiences: &ffclient.AudiencesConfig{
+        Provider: &redisprovider.Provider{
+            Options: &redis.UniversalOptions{Addrs: []string{"redis:6379"}},
+        },
+        Config: audience.Config{
+            Cache:         audience.CacheConfig{Size: 1000, TTL: 5 * time.Second},
+            LookupTimeout: 50 * time.Millisecond,
+            FailMode:      audience.FailModeUnknown,
+            Defaults:      audience.ListSettings{Prefix: "goff:", Layout: audience.LayoutSet},
+        },
+    },
+})
+defer ffclient.Close() // also shuts the audience provider down
+```
+
+The provider is initialized by GO Feature Flag and shut down on `Close()`. The `Config` fields are the same as the [relay proxy ones](../relay-proxy/configure-relay-proxy#audiences) (`Defaults` and `Definitions`). An optional `Metrics` field receives the audience metrics.
+
+Use `RawVariationWithContext` and `GetFlagStatesWithContext` instead of their counterparts to bound the store lookups with a `context.Context`.

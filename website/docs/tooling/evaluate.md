@@ -33,4 +33,4 @@ Check the [installation guide](./cli) to install the `go-feature-flag-cli`.
 | `--ctx`    | **(mandatory)** The evaluation context used to evaluate the flag in json format (ex: `{"targetingKey":"123"}`).        |
 | `--format` | The format of your configuration flag _(acceptable values:`yaml`, `json`, `toml`)_.<br/>Default: **`yaml`**            |
 | `--flag`   | The name of the flag you want to evaluate, if omitted all flags will be evaluated                                      |
-
+| `--audiences` | Path to a YAML or JSON file with an `audiences:` block (relay proxy format). When set, the `audience()` terms of your flags are resolved from the audience store (read-only). Without it they are `NOT_CONFIGURED`. |

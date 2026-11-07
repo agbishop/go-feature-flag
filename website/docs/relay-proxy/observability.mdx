@@ -98,6 +98,20 @@ The relay proxy supports [Prometheus native histograms](https://prometheus.io/do
 
 ---
 
+## Audiences metrics
+
+When [audiences](../configure_flag/audiences) are configured, these Prometheus metrics are exposed on `/metrics`.
+Labels contain the list name, never member ids.
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `gofeatureflag_audience_lookups_total` | counter | `list`, `result` (`member`, `not_member`, `unknown`) |
+| `gofeatureflag_audience_lookup_duration_seconds` | histogram | `list`, `layout` |
+| `gofeatureflag_audience_cache_total` | counter | `list`, `outcome` (`hit`, `miss`) |
+| `gofeatureflag_audience_unknown_total` | counter | `list`, `reason` (`store_error`, `timeout`, `missing_attribute`) |
+
+Logs never contain the ids being looked up.
+
 ## Use specific port for the monitoring
 You can configure a different port for the monitoring endpoints.   
 This is useful if you want to expose the monitoring endpoints on a different port than the main service.

@@ -255,6 +255,79 @@ exporters:
     kafka:
       topic: "go-feature-flag-events"
 ```
+### `audiences`
+
+:::caution Experimental
+See [Audiences](../configure_flag/audiences) for the flag syntax and behavior.
+:::
+
+Configures the external stores used by the `audience()` query term.
+
+- option name: `audiences`
+- type: **object**
+- default: **none** (audiences are not configured, rules using them are skipped and report `NOT_CONFIGURED`)
+- with `flagsets`, the top-level `audiences` block is rejected at startup: configure `audiences` inside each flagset.
+- mandatory: <NotMandatory />
+
+```yaml title="example goff-proxy.yaml"
+audiences:
+  provider:
+    kind: redis                  # redis (works with Valkey servers)
+    prefix: "goff:"              # default prefix of all the lists
+    options:
+      addrs: ["redis:6379"]      # one address = single node, several = Cluster
+      masterName: ""             # set to use Sentinel
+      username: goff
+      password: secret
+      db: 0
+      dialTimeout: 500           # milliseconds
+      readTimeout: 200           # milliseconds
+      writeTimeout: 200          # milliseconds
+      poolSize: 20
+      minIdleConns: 2
+      tls:
+        enabled: true
+        insecureSkipVerify: false
+        serverName: redis.example.com
+  cache:
+    size: 1000
+    ttl: 5s
+  lookupTimeout: 50ms
+  failMode: unknown
+  defaults:
+    layout: set
+    normalize: none
+    hash: none
+    encoding: hex
+  definitions:
+    beta_testers:
+      prefix: "segments:"
+      normalize: trimLower
+      hash: sha256
+      encoding: hex
+    "big_*":
+      layout: keys
+    churned:
+      failMode: empty
+```
+
+| Field | Description |
+|-------|-------------|
+| `provider.kind` | Store implementation. Only `redis` is available (it also works with Valkey servers). **Mandatory.** |
+| `provider.prefix` | Default prefix of the keys of all the lists. Use a different one from the Redis retriever if they share a database. |
+| `provider.options` | Connection options of the Redis client: `addrs` (mandatory), `masterName`, `username`, `password`, `db`, `dialTimeout`/`readTimeout`/`writeTimeout` (in milliseconds), `poolSize`, `minIdleConns`, `tls` (`enabled`, `insecureSkipVerify`, `serverName`). |
+| `cache.size` | Maximum number of lookup results kept in the LRU cache. `0` disables the cache (every evaluation reads the store). |
+| `cache.ttl` | How long a result is kept, as a duration string like `5s` (at least `1ms`, required when the cache is enabled). A bare number is read as nanoseconds and rejected. A membership change is visible within this delay. |
+| `lookupTimeout` | Deadline for all the lookups of one request, as a duration string like `50ms` (at least `1ms`; a bare number is read as nanoseconds and rejected). Lookups pending at the deadline fail. Default: **`50ms`**. |
+| `failMode` | `unknown` (default) or `empty`, see [failure handling](../configure_flag/audiences#failure-handling). |
+| `defaults` | Settings of every list without a definition: `prefix`, `layout` (`set` default, or `keys`), `normalize` (`none` default, or `trimLower`), `hash` (`none` default, or `sha256`), `encoding` (`hex` default, or `raw`), `failMode`. |
+| `definitions` | Settings by list name or glob (e.g. `big_*`); unset fields inherit from `defaults`. Only needed for lists with different settings. |
+
+New lists need no configuration change or restart: a list without a definition uses `defaults`.
+
+Changes to the `audiences` block (cache, `lookupTimeout`, `failMode`, `defaults`, `definitions`, and even the store `options`) are applied **without restarting** the relay proxy, as soon as the configuration file is reloaded. When the store settings are unchanged the existing connection is kept and the cache of the lookups is carried over, so the change does not send a burst of lookups to the store: only the entries of the lists whose settings changed (`prefix`, `layout`, `normalize`, `hash`, `encoding`) are fetched again. A change of `cache.size`, or of the store, empties the cache. A change of `cache.ttl` applies to the entries cached from then on (existing entries keep their expiry). When the store changes, the new store is connected in the background and the previous one is closed. The change is applied only if `audiences` is the only modification of the (flagset) configuration; any other change in the same reload is rejected as usual. Enabling or disabling `audiences` altogether still requires a restart.
+See the [Redis data contract](../configure_flag/audiences-redis) for the layouts, normalization and hashing.
+
 ### `notifiers`
 
 Notifiers is the configuration on where to notify a flag changes.

@@ -17,6 +17,8 @@ type evaluate struct {
 	fileFormat    string
 	flag          string
 	evaluationCtx string
+	// audiences (optional) resolves the audience() terms.
+	audiences *ffclient.AudiencesConfig
 }
 
 // Evaluate evaluates the feature flags based on the configuration and context
@@ -25,6 +27,7 @@ func (e evaluate) Evaluate() (map[string]model.RawVarResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer goff.Close()
 
 	convertedEvaluationCtx, err := e.parseEvaluationContext()
 	if err != nil {
@@ -47,6 +50,7 @@ func (e evaluate) initGOFF() (*ffclient.GoFeatureFlag, error) {
 		Context:               context.Background(),
 		Retriever:             e.retriever,
 		FileFormat:            e.fileFormat,
+		Audiences:             e.audiences,
 	}
 	return ffclient.New(c)
 }

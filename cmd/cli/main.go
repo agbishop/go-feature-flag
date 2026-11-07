@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/thomaspoignant/go-feature-flag/cmd/cli/audiencecmd"
 	"github.com/thomaspoignant/go-feature-flag/cmd/cli/evaluate"
 	"github.com/thomaspoignant/go-feature-flag/cmd/cli/generate"
 	"github.com/thomaspoignant/go-feature-flag/cmd/cli/helper"
@@ -23,5 +24,6 @@ func initRootCmd() *cobra.Command {
 	rootCmd.AddCommand(evaluate.NewEvaluateCmd())
 	rootCmd.AddCommand(linter.NewLintCmd())
 	rootCmd.AddCommand(generate.NewGenerateCmd())
+	rootCmd.AddCommand(audiencecmd.NewAudienceCmd())
 	return rootCmd
 }

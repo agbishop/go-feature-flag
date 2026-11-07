@@ -28,6 +28,22 @@ Check the [installation guide](./cli) to install the `go-feature-flag-cli`.
 
 You have to pass the location of your configuration file and the format of your current configuration file _(available formats are `yaml`, `json`, `toml`)_.
 
+## Check the audiences
+
+If your flags use [audiences](../configure_flag/audiences) (`audience("name")` in a query), you can check that the lists exist in the audience store:
+
+```shell
+./go-feature-flag-cli lint /input/my-go-feature-flag-config.goff.yaml --audiences=./relay-proxy.yaml
+```
+
+`--audiences` is a YAML or JSON file with an `audiences:` block, in the same format as the relay proxy configuration. Each missing list is a lint error (the command exits with an error code):
+
+```text
+ERROR: ./flags.yaml: flag my-flag: audience "beta-testers" does not exist
+```
+
+If the store is unreachable the command fails with an explicit error. The store is only read, and ids are never printed. Without `--audiences` the linter does not connect to anything.
+
 ## Use the linter in your CI (continuous integration)
 
 You can run `go-feature-flag-cli` directly in your CI:

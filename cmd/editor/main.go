@@ -11,6 +11,7 @@ import (
 	custommiddleware "github.com/thomaspoignant/go-feature-flag/cmdhelpers/api/middleware"
 	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/log"
 	"github.com/thomaspoignant/go-feature-flag/modules/core/dto"
+	"github.com/thomaspoignant/go-feature-flag/modules/core/ffcontext"
 	"github.com/thomaspoignant/go-feature-flag/modules/core/flag"
 	"github.com/thomaspoignant/go-feature-flag/modules/core/model"
 	"github.com/thomaspoignant/go-feature-flag/modules/core/utils"
@@ -57,11 +58,13 @@ func EvaluateHandler(c *echo.Context) error {
 		return err
 	}
 	f := u.Flag.Convert()
+	evalCtx := utils.ConvertEvaluationCtxFromRequest(u.Context.Key, u.Context.Custom)
 	value, resolutionDetails := f.Value(
 		u.FlagName,
-		utils.ConvertEvaluationCtxFromRequest(u.Context.Key, u.Context.Custom),
+		evalCtx,
 		flag.Context{
-			DefaultSdkValue: nil,
+			DefaultSdkValue:    nil,
+			AudienceMembership: simulateAudienceMembership(&f, evalCtx, u.AudienceMembership),
 		},
 	)
 	resp := model.VariationResult[any]{
@@ -71,7 +74,7 @@ func EvaluateHandler(c *echo.Context) error {
 		ErrorCode:     resolutionDetails.ErrorCode,
 		Failed:        resolutionDetails.ErrorCode != "",
 		Cacheable:     resolutionDetails.Cacheable,
-		Metadata:      f.GetMetadata(),
+		Metadata:      withAudienceStatus(f.GetMetadata(), resolutionDetails.Metadata),
 	}
 	return c.JSON(http.StatusOK, resp)
 }
@@ -86,10 +89,58 @@ type editorEvaluateRequest struct {
 	Context  ContextWrapper `json:"context,omitempty"`
 	Flag     dto.DTO        `json:"flag,omitempty"`
 	FlagName string         `json:"flagName,omitempty"`
+	// AudienceMembership (optional) simulates the membership of the evaluation context in the
+	// audience lists used by the flag, keyed by list name. The editor has no audience store:
+	// without it, the audience terms are NOT_CONFIGURED, and a list that is not in the map is
+	// unknown (STORE_ERROR).
+	AudienceMembership map[string]AudienceSimulation `json:"audienceMembership,omitempty"`
+}
+
+// AudienceSimulation is the simulated membership of the evaluation context in one list.
+type AudienceSimulation struct {
+	Member bool `json:"member"`
+}
+
+// simulateAudienceMembership builds the membership of the audience terms of the flag from the
+// simulation of the request. It returns nil (audiences not configured) when there is none.
+func simulateAudienceMembership(
+	f *flag.InternalFlag, evalCtx ffcontext.Context, sim map[string]AudienceSimulation,
+) flag.AudienceMembership {
+	if sim == nil {
+		return nil
+	}
+	out := flag.AudienceMembership{}
+	ctxMap := flag.AudienceContextMap(evalCtx)
+	for _, t := range f.AudienceTerms() {
+		s, ok := sim[t.List]
+		if !ok {
+			continue
+		}
+		value, ok := flag.AudienceAttributeValue(ctxMap, t.Attribute)
+		if !ok {
+			continue
+		}
+		out[flag.AudienceLookup{List: t.List, Value: value}] = flag.AudienceResult{Member: s.Member}
+	}
+	return out
 }
 
 // ContextWrapper is a struct to migrate the API request to an actual evaluation context.
 type ContextWrapper struct {
 	Key    string `json:"key,omitempty"`
 	Custom map[string]any
+}
+
+// withAudienceStatus adds the audience status of the evaluation (if any) to the flag metadata.
+func withAudienceStatus(flagMetadata, resolutionMetadata map[string]any) map[string]any {
+	status, ok := resolutionMetadata[flag.AudienceStatusMetadataKey]
+	if !ok {
+		return flagMetadata
+	}
+	out := make(map[string]any, len(flagMetadata)+1)
+	for k, v := range flagMetadata {
+		out[k] = v
+	}
+	out[flag.AudienceStatusMetadataKey] = status
+	return out
 }
