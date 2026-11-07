@@ -58,7 +58,7 @@ func (h *allFlags) Handler(c *echo.Context) error {
 		return err
 	}
 	tracer := otel.GetTracerProvider().Tracer(configfile.OtelTracerName)
-	_, span := tracer.Start(c.Request().Context(), "AllFlagsState")
+	ctx, span := tracer.Start(c.Request().Context(), "AllFlagsState")
 	defer span.End()
 
 	flagset, httpErr := helper.FlagSet(h.flagsetManager, helper.APIKey(c))
@@ -69,17 +69,18 @@ func (h *allFlags) Handler(c *echo.Context) error {
 	var allFlags flagstate.AllFlags
 	if len(evaluationCtx.ExtractGOFFProtectedFields().FlagList) > 0 {
 		// if we have a list of flags to evaluate in the evaluation context, we evaluate only those flags.
-		allFlags = flagset.GetFlagStates(
-			evaluationCtx,
+		allFlags = flagset.GetFlagStatesWithContext(
+			ctx, evaluationCtx,
 			evaluationCtx.ExtractGOFFProtectedFields().FlagList,
 		)
 	} else {
-		allFlags = flagset.AllFlagsState(evaluationCtx)
+		allFlags = flagset.AllFlagsStateWithContext(ctx, evaluationCtx)
 	}
 
 	flagNames := make([]string, 0, len(allFlags.GetFlags()))
-	for key := range allFlags.GetFlags() {
+	for key, state := range allFlags.GetFlags() {
 		flagNames = append(flagNames, key)
+		helper.MarkUncacheableOnAudience(c, state.Metadata)
 	}
 	h.metrics.IncAllFlag(flagNames...)
 

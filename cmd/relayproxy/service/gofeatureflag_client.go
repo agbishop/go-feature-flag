@@ -11,8 +11,11 @@ import (
 	awsConf "github.com/aws/aws-sdk-go-v2/config"
 	slogzap "github.com/samber/slog-zap/v2"
 	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/audience"
 	"github.com/thomaspoignant/go-feature-flag/cmd/relayproxy/config"
 	"github.com/thomaspoignant/go-feature-flag/cmd/relayproxy/config/kafka"
+	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/audienceconf"
+	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/retrieverconf"
 	retrieverInit "github.com/thomaspoignant/go-feature-flag/cmdhelpers/retrieverconf/init"
 	"github.com/thomaspoignant/go-feature-flag/exporter"
 	"github.com/thomaspoignant/go-feature-flag/exporter/azureexporter"
@@ -37,14 +40,32 @@ import (
 	"go.uber.org/zap"
 )
 
+// ClientOption customizes NewGoFeatureFlagClient.
+type ClientOption func(*clientOptions)
+
+type clientOptions struct {
+	audienceMetrics audience.Metrics
+}
+
+// WithClientAudienceMetrics sets the metrics reported by the audience lookups.
+func WithClientAudienceMetrics(m audience.Metrics) ClientOption {
+	return func(o *clientOptions) { o.audienceMetrics = m }
+}
+
 func NewGoFeatureFlagClient(
 	cFlagSet *config.FlagSet,
 	logger *zap.Logger,
 	notifiers []notifier.Notifier,
+	opts ...ClientOption,
 ) (*ffclient.GoFeatureFlag, error) {
 	var err error
 	if cFlagSet == nil {
 		return nil, fmt.Errorf("proxy config is empty")
+	}
+
+	co := clientOptions{}
+	for _, opt := range opts {
+		opt(&co)
 	}
 
 	retrievers, err := initRetrievers(cFlagSet)
@@ -76,7 +97,13 @@ func NewGoFeatureFlagClient(
 	// end of backward compatibility for the notifier field in version v1.66.0
 	notif = append(notif, notifiers...)
 
+	audiences, err := initAudiences(cFlagSet, logger, co.audienceMetrics)
+	if err != nil {
+		return nil, err
+	}
+
 	f := ffclient.Config{
+		Audiences: audiences,
 		PollingInterval: time.Duration(
 			cFlagSet.PollingInterval,
 		) * time.Millisecond,
@@ -98,6 +125,58 @@ func NewGoFeatureFlagClient(
 		return nil, err
 	}
 	return client, nil
+}
+
+// initAudiences builds the audiences configuration of the client, nil when not configured.
+func initAudiences(
+	c *config.FlagSet, logger *zap.Logger, metrics audience.Metrics,
+) (*ffclient.AudiencesConfig, error) {
+	if c.Audiences == nil {
+		return nil, nil
+	}
+	provider, err := audienceconf.InitProvider(c.Audiences)
+	if err != nil {
+		return nil, err
+	}
+	warnAudiencePrefixCollisions(c, logger)
+	return &ffclient.AudiencesConfig{
+		Provider: provider,
+		Config:   c.Audiences.EffectiveConfig(),
+		Metrics:  metrics,
+	}, nil
+}
+
+// AudiencePrefixCollisions returns the audience prefixes that are also the prefix of a Redis
+// retriever of the flagset: audiences and flags would share a key namespace.
+func AudiencePrefixCollisions(c *config.FlagSet) []string {
+	if c == nil || c.Audiences == nil {
+		return nil
+	}
+	retrievers := make([]retrieverconf.RetrieverConf, 0)
+	if c.Retriever != nil {
+		retrievers = append(retrievers, *c.Retriever)
+	}
+	if c.Retrievers != nil {
+		retrievers = append(retrievers, *c.Retrievers...)
+	}
+	var out []string
+	for _, p := range c.Audiences.Prefixes() {
+		for _, r := range retrievers {
+			if r.Kind == retrieverconf.RedisRetriever && p == r.RedisPrefix {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func warnAudiencePrefixCollisions(c *config.FlagSet, logger *zap.Logger) {
+	for _, p := range AudiencePrefixCollisions(c) {
+		logger.Warn("an audience prefix is the same as the prefix of a Redis retriever, "+
+			"use a different prefix to keep audiences and flags apart",
+			zap.String("flagset", c.Name), zap.String("prefix", p))
+	}
 }
 
 // initLeveledLogger initializes the leveled logger

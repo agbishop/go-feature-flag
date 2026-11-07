@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 	ffclient "github.com/thomaspoignant/go-feature-flag"
+	"github.com/thomaspoignant/go-feature-flag/audience"
 	"github.com/thomaspoignant/go-feature-flag/cmd/relayproxy/config"
 	"github.com/thomaspoignant/go-feature-flag/cmd/relayproxy/proxynotifier"
 	"github.com/thomaspoignant/go-feature-flag/cmd/relayproxy/service/stream"
@@ -84,6 +85,21 @@ type flagsetManagerImpl struct {
 
 	// Logger is the logger for the flagset manager.
 	logger *zap.Logger
+
+	// audienceMetrics is given to the clients created at runtime.
+	audienceMetrics audience.Metrics
+}
+
+// ManagerOption customizes the FlagsetManager.
+type ManagerOption func(*managerOptions)
+
+type managerOptions struct {
+	audienceMetrics audience.Metrics
+}
+
+// WithAudienceMetrics sets the metrics reported by the audience lookups of every flagset.
+func WithAudienceMetrics(m audience.Metrics) ManagerOption {
+	return func(o *managerOptions) { o.audienceMetrics = m }
 }
 
 // NewFlagsetManager is creating a new FlagsetManager.
@@ -93,17 +109,22 @@ type flagsetManagerImpl struct {
 func NewFlagsetManager(
 	config *config.Config, logger *zap.Logger, notifiers []notifier.Notifier,
 	sseService stream.SSEService,
+	opts ...ManagerOption,
 ) (FlagsetManager, error) {
 	if config == nil {
 		return nil, fmt.Errorf("configuration is nil")
+	}
+	mo := managerOptions{}
+	for _, opt := range opts {
+		opt(&mo)
 	}
 
 	var flagsetMngr FlagsetManager
 	var err error
 	if config.IsUsingFlagsets() {
-		flagsetMngr, err = newFlagsetManagerWithFlagsets(config, logger, notifiers, sseService)
+		flagsetMngr, err = newFlagsetManagerWithFlagsets(config, logger, notifiers, sseService, mo)
 	} else {
-		flagsetMngr, err = newFlagsetManagerWithDefaultConfig(config, logger, notifiers, sseService)
+		flagsetMngr, err = newFlagsetManagerWithDefaultConfig(config, logger, notifiers, sseService, mo)
 	}
 	if err != nil {
 		return nil, err
@@ -114,13 +135,14 @@ func NewFlagsetManager(
 
 func newFlagsetManagerWithDefaultConfig(
 	c *config.Config, logger *zap.Logger, notifiers []notifier.Notifier,
-	sseService stream.SSEService,
+	sseService stream.SSEService, mo managerOptions,
 ) (FlagsetManager, error) {
 	defaultFlagSet := config.FlagSet{
 		Name: utils.DefaultFlagSetName,
 		CommonFlagSet: config.CommonFlagSet{
 			Retriever:                       c.Retriever,
 			Retrievers:                      c.Retrievers,
+			Audiences:                       c.Audiences,
 			Notifiers:                       c.Notifiers,
 			Exporter:                        c.Exporter,
 			Exporters:                       c.Exporters,
@@ -134,23 +156,25 @@ func newFlagsetManagerWithDefaultConfig(
 		},
 	}
 	allNotifiers := appendSSENotifier(notifiers, sseService, utils.DefaultFlagSetName)
-	client, err := NewGoFeatureFlagClient(&defaultFlagSet, logger, allNotifiers)
+	client, err := NewGoFeatureFlagClient(
+		&defaultFlagSet, logger, allNotifiers, WithClientAudienceMetrics(mo.audienceMetrics))
 	if err != nil {
 		return nil, err
 	}
 	return &flagsetManagerImpl{
-		DefaultFlagSet: client,
-		notifiers:      notifiers,
-		sseService:     sseService,
-		config:         c,
-		mode:           flagsetManagerModeDefault,
-		logger:         logger,
+		DefaultFlagSet:  client,
+		notifiers:       notifiers,
+		sseService:      sseService,
+		config:          c,
+		mode:            flagsetManagerModeDefault,
+		logger:          logger,
+		audienceMetrics: mo.audienceMetrics,
 	}, nil
 }
 
 func newFlagsetManagerWithFlagsets(
 	config *config.Config, logger *zap.Logger, notifiers []notifier.Notifier,
-	sseService stream.SSEService,
+	sseService stream.SSEService, mo managerOptions,
 ) (FlagsetManager, error) {
 	flagsets := make(map[string]*ffclient.GoFeatureFlag)
 	apiKeysToFlagSet := make(map[string]string)
@@ -170,7 +194,7 @@ func newFlagsetManagerWithFlagsets(
 		}
 
 		allNotifiers := appendSSENotifier(notifiers, sseService, flagSetName)
-		client, err := NewGoFeatureFlagClient(&flagset, logger, allNotifiers)
+		client, err := NewGoFeatureFlagClient(&flagset, logger, allNotifiers, WithClientAudienceMetrics(mo.audienceMetrics))
 		if err != nil {
 			logger.Error(
 				"failed to create goff client for flagset",
@@ -199,6 +223,7 @@ func newFlagsetManagerWithFlagsets(
 		config:               config,
 		mode:                 flagsetManagerModeFlagsets,
 		logger:               logger,
+		audienceMetrics:      mo.audienceMetrics,
 	}, nil
 }
 
@@ -396,7 +421,7 @@ func indexNamedFlagsets(flagsets []config.FlagSet) map[string]config.FlagSet {
 // can serve evaluations immediately.
 func (m *flagsetManagerImpl) addFlagset(flagset config.FlagSet) {
 	allNotifiers := appendSSENotifier(m.notifiers, m.sseService, flagset.Name)
-	client, err := NewGoFeatureFlagClient(&flagset, m.logger, allNotifiers)
+	client, err := NewGoFeatureFlagClient(&flagset, m.logger, allNotifiers, WithClientAudienceMetrics(m.audienceMetrics))
 	if err != nil {
 		m.logger.Error(
 			"failed to create the flagset added at runtime, it will not be available until the "+
@@ -459,6 +484,23 @@ func (m *flagsetManagerImpl) removeFlagset(flagset config.FlagSet) {
 func (m *flagsetManagerImpl) reconcileExistingFlagset(current, newFlagset config.FlagSet) {
 	// slices.Equal is panic-safe on []string and treats nil and empty slices as equal.
 	apiKeysChanged := !slices.Equal(current.APIKeys, newFlagset.APIKeys)
+
+	// The audiences can be changed at runtime, if they are the only change of the common
+	// configuration. The comparison below then ignores them.
+	if reflect.DeepEqual(withoutAudiences(current.CommonFlagSet), withoutAudiences(newFlagset.CommonFlagSet)) &&
+		audiencesChanged(current.Audiences, newFlagset.Audiences) {
+		m.flagsetsMutex.RLock()
+		client := m.FlagSets[newFlagset.Name]
+		m.flagsetsMutex.RUnlock()
+		if applyAudiences(client, newFlagset.Name, m.audienceMetrics,
+			current.Audiences, newFlagset.Audiences, m.logger) {
+			if err := m.config.SetFlagSetAudiences(newFlagset.Name, newFlagset.Audiences); err != nil {
+				m.logger.Error("failed to update the audiences of the flagset in the configuration",
+					zap.String("flagset", newFlagset.Name), zap.Error(err))
+			}
+			current.Audiences = newFlagset.Audiences
+		}
+	}
 
 	// reflect.DeepEqual is used on purpose instead of cmp.Equal: it never panics on the
 	// unexported fields that can be reached through the flagset configuration (e.g. the Kafka
@@ -614,6 +656,14 @@ func (m *flagsetManagerImpl) onConfigChangeWithDefault(newConfig *config.Config)
 	currentAPIKeys := m.config.GetAPIKeys()
 	newAuthorizedKeys := newConfig.GetAuthorizedKeys()
 	newAPIKeys := newConfig.GetAPIKeys()
+
+	// The audiences can be changed at runtime.
+	currentAudiences := m.config.GetAudiences()
+	if audiencesChanged(currentAudiences, newConfig.GetAudiences()) &&
+		applyAudiences(m.DefaultFlagSet, utils.DefaultFlagSetName, m.audienceMetrics,
+			currentAudiences, newConfig.GetAudiences(), m.logger) {
+		m.config.SetAudiences(newConfig.GetAudiences())
+	}
 
 	if !cmp.Equal(m.config, newConfig,
 		cmpopts.IgnoreUnexported(config.Config{}), cmpopts.IgnoreFields(config.Config{}, "APIKeys", "AuthorizedKeys")) {

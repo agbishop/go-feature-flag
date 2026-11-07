@@ -1,6 +1,7 @@
 package ffclient
 
 import (
+	"context"
 	"fmt"
 	"maps"
 
@@ -52,7 +53,7 @@ func (g *GoFeatureFlag) BoolVariationDetails(
 	ctx ffcontext.Context,
 	defaultValue bool,
 ) (model.VariationResult[bool], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "bool")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "bool")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -94,7 +95,7 @@ func IntVariationDetails(
 // Note: Use this function only if you are using multiple go-feature-flag instances.
 func (g *GoFeatureFlag) IntVariationDetails(flagKey string, ctx ffcontext.Context, defaultValue int,
 ) (model.VariationResult[int], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "int")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "int")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -140,7 +141,7 @@ func (g *GoFeatureFlag) Float64VariationDetails(
 	ctx ffcontext.Context,
 	defaultValue float64,
 ) (model.VariationResult[float64], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "float64")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "float64")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -182,7 +183,7 @@ func (g *GoFeatureFlag) StringVariationDetails(
 	ctx ffcontext.Context,
 	defaultValue string,
 ) (model.VariationResult[string], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "string")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "string")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -226,7 +227,7 @@ func (g *GoFeatureFlag) JSONArrayVariationDetails(
 	ctx ffcontext.Context,
 	defaultValue []any,
 ) (model.VariationResult[[]any], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "[]interface{}")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "[]interface{}")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -271,7 +272,7 @@ func (g *GoFeatureFlag) JSONVariationDetails(
 	ctx ffcontext.Context,
 	defaultValue map[string]any,
 ) (model.VariationResult[map[string]any], error) {
-	res, err := getVariation(g, flagKey, ctx, defaultValue, "bool")
+	res, err := getVariation(g.defaultEvalContext(), g, flagKey, ctx, defaultValue, "bool")
 	notifyVariation(g, flagKey, ctx, res)
 	return res, err
 }
@@ -286,7 +287,19 @@ func (g *GoFeatureFlag) RawVariation(
 	ctx ffcontext.Context,
 	sdkDefaultValue any,
 ) (model.RawVarResult, error) {
-	res, err := getVariation(g, flagKey, ctx, sdkDefaultValue, "interface{}")
+	return g.RawVariationWithContext(g.defaultEvalContext(), flagKey, ctx, sdkDefaultValue)
+}
+
+// RawVariationWithContext is RawVariation with a context.Context that bounds the I/O done during
+// the evaluation (the audience lookups). Use the context of the incoming request.
+// Note: Use this function only if you are using multiple go-feature-flag instances.
+func (g *GoFeatureFlag) RawVariationWithContext(
+	reqCtx context.Context,
+	flagKey string,
+	ctx ffcontext.Context,
+	sdkDefaultValue any,
+) (model.RawVarResult, error) {
+	res, err := getVariation(reqCtx, g, flagKey, ctx, sdkDefaultValue, "interface{}")
 	notifyVariation(g, flagKey, ctx, res)
 	return model.RawVarResult(res), err
 }
@@ -326,6 +339,10 @@ func notifyVariation[T model.JSONType](
 	result model.VariationResult[T],
 ) {
 	if result.TrackEvents {
+		if ctx == nil {
+			// a nil evaluation context is evaluated as an empty one, the event must not panic.
+			ctx = ffcontext.NewEvaluationContext("")
+		}
 		event := exporter.NewFeatureEvent(
 			ctx,
 			flagKey,
@@ -348,6 +365,7 @@ func notifyVariation[T model.JSONType](
 // contain a valid model.VariationResult
 // nolint:funlen
 func getVariation[T model.JSONType](
+	reqCtx context.Context,
 	g *GoFeatureFlag,
 	flagKey string,
 	evaluationCtx ffcontext.Context,
@@ -399,5 +417,6 @@ func getVariation[T model.JSONType](
 	if g.config.Environment != "" {
 		flagCtx.AddIntoEvaluationContextEnrichment("env", g.config.Environment)
 	}
+	flagCtx.AudienceMembership = g.resolveAudiences(reqCtx, f, evaluationCtx, flagCtx.EvaluationContextEnrichment)
 	return evaluation.Evaluate[T](f, flagKey, evaluationCtx, flagCtx, expectedType, sdkDefaultValue)
 }

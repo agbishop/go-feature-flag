@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 
+	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/audienceconf"
 	"github.com/thomaspoignant/go-feature-flag/cmdhelpers/retrieverconf"
 )
 
@@ -34,6 +35,10 @@ type CommonFlagSet struct {
 	// Note: If both Retriever and Retrievers are set, we will start by calling the Retriever and,
 	// after we will use the order of Retrievers.
 	Retrievers *[]retrieverconf.RetrieverConf `mapstructure:"retrievers" koanf:"retrievers"`
+
+	// Audiences configures the audience() query term: lists of targeting keys stored in an
+	// external store (Redis or Valkey). Audiences are not used when it is not set.
+	Audiences *audienceconf.AudiencesConf `mapstructure:"audiences" koanf:"audiences"`
 
 	// Notifiers is the configuration on where to notify a flag change
 	Notifiers []NotifierConf `mapstructure:"notifiers" koanf:"notifiers"`
@@ -159,4 +164,30 @@ func (c *Config) getFlagSetIndexFromName(flagsetName string) (int, error) {
 		}
 	}
 	return -1, fmt.Errorf("flagset %s not found", flagsetName)
+}
+
+// GetAudiences returns the top-level audiences configuration (default mode).
+func (c *Config) GetAudiences() *audienceconf.AudiencesConf {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return c.Audiences
+}
+
+// SetAudiences replaces the top-level audiences configuration (default mode).
+func (c *Config) SetAudiences(a *audienceconf.AudiencesConf) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.Audiences = a
+}
+
+// SetFlagSetAudiences replaces the audiences configuration of a flagset.
+func (c *Config) SetFlagSetAudiences(flagsetName string, a *audienceconf.AudiencesConf) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	index, err := c.getFlagSetIndexFromName(flagsetName)
+	if err != nil {
+		return err
+	}
+	c.FlagSets[index].Audiences = a
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/thomaspoignant/go-feature-flag/audience"
 	"github.com/thomaspoignant/go-feature-flag/notifier"
 	"github.com/thomaspoignant/go-feature-flag/retriever"
 	"github.com/thomaspoignant/go-feature-flag/utils/fflog"
@@ -114,12 +115,29 @@ type Config struct {
 	// Default: nil
 	Name *string
 
+	// Audiences (optional) enables the audience() query term: membership of the evaluation
+	// context in lists stored outside of the flag file (see the audience package).
+	// Without it, flags using audience() report NOT_CONFIGURED and their audience rules are skipped.
+	Audiences *AudiencesConfig
+
 	// offlineMutex is a mutex to protect the Offline field.
 	offlineMutex *sync.RWMutex
 
 	// internalLogger is the logger used by the library everywhere
 	// this logger is a superset of the logging system to be able to migrate easily to slog.
 	internalLogger *fflog.FFLogger
+}
+
+// AudiencesConfig configures the audiences of go-feature-flag.
+type AudiencesConfig struct {
+	// Provider is the audience store (for example redisprovider.Provider).
+	// GO Feature Flag initializes it in New and shuts it down in Close.
+	// With UpdateAudiences, nil keeps the running provider.
+	Provider audience.Provider
+	// Config configures the cache, timeouts, fail mode and the layout of the lists.
+	Config audience.Config
+	// Metrics (optional) receives the audience metrics. Default: no metrics.
+	Metrics audience.Metrics
 }
 
 // Initialize assigns defaults to the configuration.

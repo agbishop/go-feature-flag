@@ -71,7 +71,7 @@ func (h *flagEval) Handler(c *echo.Context) error {
 	}
 
 	tracer := otel.GetTracerProvider().Tracer(configfile.OtelTracerName)
-	_, span := tracer.Start(c.Request().Context(), "flagEvaluation")
+	ctx, span := tracer.Start(c.Request().Context(), "flagEvaluation")
 	defer span.End()
 
 	flagset, httpErr := helper.FlagSet(h.flagsetMngr, helper.APIKey(c))
@@ -79,7 +79,7 @@ func (h *flagEval) Handler(c *echo.Context) error {
 		return httpErr
 	}
 
-	flagValue, _ := flagset.RawVariation(flagKey, evaluationCtx, reqBody.DefaultValue)
+	flagValue, _ := flagset.RawVariationWithContext(ctx, flagKey, evaluationCtx, reqBody.DefaultValue)
 	if flagValue.ErrorCode == flag.ErrorCodeFlagNotFound {
 		h.metrics.IncFlagNotFoundEvaluation()
 	} else {
@@ -103,5 +103,6 @@ func (h *flagEval) Handler(c *echo.Context) error {
 		span.SetAttributes(attribute.String("flagEvaluation.flagSetName", flagsetName))
 	}
 
+	helper.MarkUncacheableOnAudience(c, flagValue.Metadata)
 	return c.JSON(http.StatusOK, flagValue)
 }

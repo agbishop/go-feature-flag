@@ -2,6 +2,7 @@ package ffclient
 
 import (
 	"context"
+	"maps"
 
 	"github.com/thomaspoignant/go-feature-flag/ffcontext"
 	"github.com/thomaspoignant/go-feature-flag/internal/flagstate"
@@ -12,6 +13,12 @@ import (
 // If a valid field is false, it means that we had an error when checking the flags.
 func AllFlagsState(ctx ffcontext.Context) flagstate.AllFlags {
 	return ff.AllFlagsState(ctx)
+}
+
+// AllFlagsStateWithContext is AllFlagsState with a context.Context that bounds the I/O done
+// during the evaluation (the audience lookups).
+func AllFlagsStateWithContext(ctx context.Context, evalCtx ffcontext.Context) flagstate.AllFlags {
+	return ff.AllFlagsStateWithContext(ctx, evalCtx)
 }
 
 // GetFlagsFromCache returns all the flags present in the cache with their
@@ -34,6 +41,17 @@ func (g *GoFeatureFlag) GetFlagStates(
 	evaluationCtx ffcontext.Context,
 	flagsToEvaluate []string,
 ) flagstate.AllFlags {
+	return g.GetFlagStatesWithContext(g.defaultEvalContext(), evaluationCtx, flagsToEvaluate)
+}
+
+// GetFlagStatesWithContext is GetFlagStates with a context.Context that bounds the I/O done
+// during the evaluation (the audience lookups, done once for all the flags). Use the context
+// of the incoming request.
+func (g *GoFeatureFlag) GetFlagStatesWithContext(
+	reqCtx context.Context,
+	evaluationCtx ffcontext.Context,
+	flagsToEvaluate []string,
+) flagstate.AllFlags {
 	if g == nil {
 		return flagstate.AllFlags{}
 	}
@@ -43,7 +61,7 @@ func (g *GoFeatureFlag) GetFlagStates(
 
 	// prepare evaluation context enrichment
 	flagCtx := flag.Context{
-		EvaluationContextEnrichment: g.config.EvaluationContextEnrichment,
+		EvaluationContextEnrichment: maps.Clone(g.config.EvaluationContextEnrichment),
 		DefaultSdkValue:             nil,
 	}
 	if g.config.Environment != "" {
@@ -52,13 +70,20 @@ func (g *GoFeatureFlag) GetFlagStates(
 
 	// Evaluate only the flags in flagsToEvaluate
 	if len(flagsToEvaluate) != 0 {
-		flagStates := flagstate.NewAllFlags()
+		selected := make(map[string]flag.Flag, len(flagsToEvaluate))
 		for _, key := range flagsToEvaluate {
 			currentFlag, err := g.retrieverManager.GetFlag(key)
 			if err != nil {
 				// We ignore flags in error
 				continue
 			}
+			selected[key] = currentFlag
+		}
+		// one lookup step for all the flags
+		flagCtx.AudienceMembership = g.resolveAllAudiences(
+			reqCtx, selected, evaluationCtx, flagCtx.EvaluationContextEnrichment)
+		flagStates := flagstate.NewAllFlags()
+		for key, currentFlag := range selected {
 			flagStates.AddFlag(
 				key,
 				flagstate.FromFlagEvaluation(key, evaluationCtx, flagCtx, currentFlag),
@@ -72,6 +97,7 @@ func (g *GoFeatureFlag) GetFlagStates(
 	if err != nil {
 		return flagstate.AllFlags{}
 	}
+	flagCtx.AudienceMembership = g.resolveAllAudiences(reqCtx, flags, evaluationCtx, flagCtx.EvaluationContextEnrichment)
 	allFlags := flagstate.NewAllFlags()
 	for key, currentFlag := range flags {
 		allFlags.AddFlag(
@@ -87,7 +113,19 @@ func (g *GoFeatureFlag) AllFlagsState(evaluationCtx ffcontext.Context) flagstate
 	if g == nil {
 		return flagstate.AllFlags{}
 	}
-	return g.GetFlagStates(evaluationCtx, []string{})
+	return g.GetFlagStatesWithContext(g.defaultEvalContext(), evaluationCtx, []string{})
+}
+
+// AllFlagsStateWithContext is AllFlagsState with a context.Context that bounds the I/O done
+// during the evaluation (the audience lookups).
+func (g *GoFeatureFlag) AllFlagsStateWithContext(
+	reqCtx context.Context,
+	evaluationCtx ffcontext.Context,
+) flagstate.AllFlags {
+	if g == nil {
+		return flagstate.AllFlags{}
+	}
+	return g.GetFlagStatesWithContext(reqCtx, evaluationCtx, []string{})
 }
 
 // GetFlagsFromCache returns all the flags present in the cache with their

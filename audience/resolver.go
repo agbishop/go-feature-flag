@@ -72,6 +72,48 @@ func NewResolver(provider Provider, cfg Config, metrics Metrics, logger *fflog.F
 	return r
 }
 
+// NewResolverFrom builds a Resolver like NewResolver and carries over the cache of prev, so a
+// configuration change does not send a burst of lookups to the store. The caller must use the
+// same provider (store) as prev, otherwise it must use NewResolver.
+//
+// The cache is carried over only when its size is unchanged. An entry is kept only when the
+// effective settings of its list (prefix, layout, normalize, hash, encoding) are unchanged: the
+// others are dropped and fetched again. A kept entry keeps its expiry, so a TTL change applies
+// to the entries cached from then on. The entries are copied (not shared), so lookups still
+// running on prev cannot add a stale entry to the new cache. It is safe to call while prev is
+// used by concurrent evaluations.
+func NewResolverFrom(prev *Resolver, provider Provider, cfg Config, metrics Metrics, logger *fflog.FFLogger) *Resolver {
+	r := NewResolver(provider, cfg, metrics, logger)
+	if prev == nil || prev.cache == nil || r.cache == nil || prev.cfg.Cache.Size != cfg.Cache.Size {
+		return r
+	}
+	oldCfg, newCfg := prev.cfg, cfg
+	unchanged := map[string]bool{}
+	now := prev.now()
+	for _, key := range prev.cache.Keys() { // from the oldest to the newest: keeps the LRU order
+		list, _, _ := strings.Cut(key, "\x00")
+		same, known := unchanged[list]
+		if !known {
+			same = sameCachedForm(oldCfg.Resolve(list), newCfg.Resolve(list))
+			unchanged[list] = same
+		}
+		if !same {
+			continue
+		}
+		if e, ok := prev.cache.Peek(key); ok && now.Before(e.expires) {
+			r.cache.Add(key, e)
+		}
+	}
+	return r
+}
+
+// sameCachedForm tells if two settings of a list give the same answers for the same id: the
+// fail mode only matters for failures, which are never cached.
+func sameCachedForm(a, b ListSettings) bool {
+	a.FailMode, b.FailMode = "", ""
+	return a == b
+}
+
 // Close releases the resources of the Resolver (it drops the cache). It starts no goroutine
 // and can be called several times. It does not shut the provider down.
 func (r *Resolver) Close() {

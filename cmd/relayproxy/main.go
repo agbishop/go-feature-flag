@@ -110,7 +110,7 @@ func main() {
 	flagsetManager, err := service.NewFlagsetManager(proxyConf, logger.ZapLogger, []notifier.Notifier{
 		prometheusNotifier,
 		proxyNotifier,
-	}, sseService)
+	}, sseService, service.WithAudienceMetrics(metricsV2.AudienceMetrics()))
 	if err != nil {
 		logger.ZapLogger.Error(
 			"impossible to start GO Feature Flag, we are not able to initialize the retrieval of flags",

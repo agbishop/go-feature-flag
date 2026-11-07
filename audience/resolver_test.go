@@ -444,3 +444,91 @@ func TestNopMetrics(t *testing.T) {
 		m.ObserveLookupDuration("a", "set", time.Second)
 	})
 }
+
+func TestNewResolverFrom(t *testing.T) {
+	ctx := context.Background()
+	cache := audience.CacheConfig{Size: 10, TTL: time.Minute}
+	terms := []flag.AudienceTerm{term("beta", "key"), term("vip", "key")}
+	tests := []struct {
+		name        string
+		prevCfg     audience.Config
+		newCfg      audience.Config
+		nilPrev     bool
+		expirePrev  bool // the entries of prev are expired when the new resolver is built
+		wantLookups int  // lookups sent to the store when resolving after the swap
+	}{
+		{name: "same config keeps every entry", prevCfg: audience.Config{Cache: cache}, newCfg: audience.Config{Cache: cache}},
+		{
+			name:    "ttl change alone keeps the entries",
+			prevCfg: audience.Config{Cache: cache},
+			newCfg:  audience.Config{Cache: audience.CacheConfig{Size: 10, TTL: time.Hour}},
+		},
+		{
+			name:    "a list with another prefix is dropped",
+			prevCfg: audience.Config{Cache: cache},
+			newCfg: audience.Config{
+				Cache:       cache,
+				Definitions: map[string]audience.ListSettings{"beta": {Prefix: "p:"}},
+			},
+			wantLookups: 1,
+		},
+		{
+			name:    "a list with another layout is dropped",
+			prevCfg: audience.Config{Cache: cache},
+			newCfg: audience.Config{
+				Cache:       cache,
+				Definitions: map[string]audience.ListSettings{"vip": {Layout: audience.LayoutKeys}},
+			},
+			wantLookups: 1,
+		},
+		{
+			name:        "another default hash drops every list",
+			prevCfg:     audience.Config{Cache: cache},
+			newCfg:      audience.Config{Cache: cache, Defaults: audience.ListSettings{Hash: audience.HashSHA256}},
+			wantLookups: 2,
+		},
+		{
+			name:        "another cache size drops everything",
+			prevCfg:     audience.Config{Cache: cache},
+			newCfg:      audience.Config{Cache: audience.CacheConfig{Size: 5, TTL: time.Minute}},
+			wantLookups: 2,
+		},
+		{
+			name:        "cache disabled in the new config",
+			prevCfg:     audience.Config{Cache: cache},
+			newCfg:      audience.Config{},
+			wantLookups: 2,
+		},
+		{name: "no previous resolver", prevCfg: audience.Config{Cache: cache}, newCfg: audience.Config{Cache: cache}, nilPrev: true, wantLookups: 2},
+		{
+			name: "expired entries are not carried over", prevCfg: audience.Config{Cache: cache},
+			newCfg: audience.Config{Cache: cache}, expirePrev: true, wantLookups: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake(t)
+			require.NoError(t, f.Add(ctx, "beta", audience.ListSettings{}, "bob"))
+			prev := audience.NewResolver(f, tt.prevCfg, nil, nil)
+			prev.Resolve(ctx, terms, ctxFor("bob"), nil)
+			require.Equal(t, 2, f.LookupCount())
+			if tt.expirePrev {
+				audience.SetClock(prev, func() time.Time { return time.Now().Add(time.Hour) })
+			}
+			var from *audience.Resolver
+			if tt.nilPrev {
+				from = audience.NewResolverFrom(nil, f, tt.newCfg, nil, nil)
+			} else {
+				from = audience.NewResolverFrom(prev, f, tt.newCfg, nil, nil)
+			}
+			// the previous resolver is closed by the caller after the swap: no impact on the new one
+			prev.Close()
+			got := from.Resolve(ctx, terms, ctxFor("bob"), nil)
+			assert.Equal(t, 2+tt.wantLookups, f.LookupCount())
+			if tt.newCfg.Defaults.Hash == "" { // a hash makes the stored (clear) id unreachable
+				assert.Equal(t, flag.AudienceResult{Member: true}, got[look("beta", "bob")])
+			}
+			assert.Equal(t, flag.AudienceResult{}, got[look("vip", "bob")])
+		})
+	}
+}

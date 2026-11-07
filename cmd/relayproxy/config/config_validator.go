@@ -72,6 +72,9 @@ func (c *Config) validateDefaultMode() error {
 	if err := validateExporters(c.Exporter, c.Exporters); err != nil {
 		return err
 	}
+	if err := c.Audiences.IsValid(); err != nil {
+		return err
+	}
 	return validateNotifiers(c.Notifiers)
 }
 
@@ -79,6 +82,13 @@ func (c *Config) validateDefaultMode() error {
 func (c *Config) validateFlagSets() error {
 	if len(c.FlagSets) == 0 {
 		return fmt.Errorf("no flagsets configured")
+	}
+
+	// The top-level audiences are not used in flagsets mode: reject them instead of silently
+	// ignoring a store the operator expects to be queried.
+	if c.Audiences != nil {
+		return errors.New("audiences: the top-level 'audiences' block is not supported with flagsets, " +
+			"configure 'audiences' inside each flagset")
 	}
 
 	// Track API keys to ensure no duplicates across flagsets
@@ -114,6 +124,10 @@ func (c *Config) validateFlagSetCommonConfig(flagset *FlagSet) error {
 	}
 
 	if err := validateExporters(flagset.Exporter, flagset.Exporters); err != nil {
+		return err
+	}
+
+	if err := flagset.Audiences.IsValid(); err != nil {
 		return err
 	}
 

@@ -2,6 +2,7 @@ package metric
 
 import (
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -187,4 +188,37 @@ func TestMetrics_IncGetManifestCall(t *testing.T) {
 	metricSrv.IncGetManifestCall()
 	metricSrv.IncGetManifestCall()
 	assert.Equal(t, 3.0, testutil.ToFloat64(metricSrv.getManifestCounter))
+}
+
+func TestAudienceMetrics(t *testing.T) {
+	m, err := NewMetrics()
+	assert.NoError(t, err)
+	am := m.AudienceMetrics()
+	assert.NotNil(t, am)
+
+	am.IncLookup("beta", "member")
+	am.IncLookup("beta", "member")
+	am.IncCache("beta", "hit")
+	am.IncUnknown("beta", "timeout")
+	am.ObserveLookupDuration("beta", "set", 3*time.Millisecond)
+
+	mfs, err := m.Registry.Gather()
+	assert.NoError(t, err)
+	got := map[string]int{}
+	for _, mf := range mfs {
+		got[mf.GetName()] = len(mf.GetMetric())
+	}
+	for _, name := range []string{
+		"gofeatureflag_audience_lookups_total",
+		"gofeatureflag_audience_lookup_duration_seconds",
+		"gofeatureflag_audience_cache_total",
+		"gofeatureflag_audience_unknown_total",
+	} {
+		assert.Equal(t, 1, got[name], name)
+	}
+	assert.Equal(t, 2.0, testutil.ToFloat64(m.audience.lookups.WithLabelValues("beta", "member")))
+
+	// the zero value has no audience metrics
+	var zero Metrics
+	assert.Nil(t, zero.AudienceMetrics())
 }

@@ -40,3 +40,15 @@ func FlagSet(flagsetManager service.FlagsetManager, apiKey string) (*ffclient.Go
 	}
 	return flagset, nil
 }
+
+// audienceStatusMetadataKey is the flag metadata key set when a flag evaluated an audience term.
+const audienceStatusMetadataKey = "gofeatureflag_audienceStatus"
+
+// MarkUncacheableOnAudience sets "Cache-Control: no-store" on the response when the metadata of
+// an evaluated flag shows that it evaluated an audience term: the answer depends on a store
+// that changes independently of the flags.
+func MarkUncacheableOnAudience(c *echo.Context, metadata map[string]any) {
+	if _, ok := metadata[audienceStatusMetadataKey]; ok {
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	}
+}

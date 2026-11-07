@@ -216,7 +216,7 @@ func TestFlagSet(t *testing.T) {
 		},
 		{
 			name:           "successful flagset retrieval should return flagset",
-			flagsetManager: &mock.MockFlagsetManager{FlagSets: map[string]*ffclient.GoFeatureFlag{"valid-key": &ffclient.GoFeatureFlag{}}},
+			flagsetManager: &mock.MockFlagsetManager{FlagSets: map[string]*ffclient.GoFeatureFlag{"valid-key": {}}},
 			apiKey:         "valid-api-key",
 			wantError:      false,
 		},
@@ -259,7 +259,7 @@ func TestFlagSetIntegration(t *testing.T) {
 	})
 
 	t.Run("should return flagset when manager returns valid flagset", func(t *testing.T) {
-		mockManager := &mock.MockFlagsetManager{FlagSets: map[string]*ffclient.GoFeatureFlag{"valid-key": &ffclient.GoFeatureFlag{}}}
+		mockManager := &mock.MockFlagsetManager{FlagSets: map[string]*ffclient.GoFeatureFlag{"valid-key": {}}}
 		flagset, err := helper.FlagSet(mockManager, "valid-key")
 		if err != nil || flagset == nil {
 			t.Logf("DEBUG: err=%v, flagset=%v", err, flagset)
@@ -267,4 +267,29 @@ func TestFlagSetIntegration(t *testing.T) {
 		assert.Nil(t, err)
 		assert.NotNil(t, flagset)
 	})
+}
+
+func TestMarkUncacheableOnAudience(t *testing.T) {
+	tests := []struct {
+		name        string
+		metadata    map[string]any
+		wantNoStore bool
+	}{
+		{name: "audience status marks the response", metadata: map[string]any{"gofeatureflag_audienceStatus": "HEALTHY"}, wantNoStore: true},
+		{name: "no audience status", metadata: map[string]any{"other": "x"}},
+		{name: "nil metadata"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			rec := httptest.NewRecorder()
+			c := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), rec)
+			helper.MarkUncacheableOnAudience(c, tt.metadata)
+			if tt.wantNoStore {
+				assert.Equal(t, "no-store", rec.Header().Get(echo.HeaderCacheControl))
+			} else {
+				assert.Empty(t, rec.Header().Get(echo.HeaderCacheControl))
+			}
+		})
+	}
 }

@@ -150,8 +150,16 @@ func NewMetrics(opts ...MetricsOpts) (Metrics, error) {
 		collectors.NewGoCollector(),
 	}
 
+	audienceMetrics := newAudienceMetrics()
+
 	// register all the metric in the custom registry
 	for _, metric := range metricToRegister {
+		if err := customRegistry.Register(metric); err != nil {
+			return Metrics{}, err
+		}
+	}
+
+	for _, metric := range audienceMetrics.collectors() {
 		if err := customRegistry.Register(metric); err != nil {
 			return Metrics{}, err
 		}
@@ -174,6 +182,7 @@ func NewMetrics(opts ...MetricsOpts) (Metrics, error) {
 		flagConfigurationCounter: flagConfigurationCounter,
 		getManifestCounter:       getManifestCounter,
 		Registry:                 customRegistry,
+		audience:                 audienceMetrics,
 	}, nil
 }
 
@@ -195,6 +204,7 @@ type Metrics struct {
 	flagDeleteCounterVec     prom.CounterVec
 	flagCreateCounterVec     prom.CounterVec
 	getManifestCounter       prom.Counter
+	audience                 *AudienceMetrics
 }
 
 func (m *Metrics) IncFlagEvaluation(flagName string) {

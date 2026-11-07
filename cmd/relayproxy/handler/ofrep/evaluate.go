@@ -2,6 +2,7 @@ package ofrep
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -86,7 +87,7 @@ func (h *EvaluateCtrl) Evaluate(c *echo.Context) error {
 	}
 
 	tracer := otel.GetTracerProvider().Tracer(configfile.OtelTracerName)
-	_, span := tracer.Start(c.Request().Context(), "flagEvaluation")
+	ctx, span := tracer.Start(c.Request().Context(), "flagEvaluation")
 	defer span.End()
 
 	flagset, httpErr := helper.FlagSet(h.flagsetManager, helper.APIKey(c))
@@ -96,7 +97,7 @@ func (h *EvaluateCtrl) Evaluate(c *echo.Context) error {
 
 	// we set a nil value to the default value to avoid the default value to be used.
 	var defaultValue any = nil
-	flagValue, _ := flagset.RawVariation(flagKey, evalCtx, defaultValue)
+	flagValue, _ := flagset.RawVariationWithContext(ctx, flagKey, evalCtx, defaultValue)
 	if flagValue.ErrorCode == flag.ErrorCodeFlagNotFound {
 		h.metrics.IncFlagNotFoundEvaluation()
 	} else {
@@ -127,13 +128,15 @@ func (h *EvaluateCtrl) Evaluate(c *echo.Context) error {
 		attribute.String("flagEvaluation.value", fmt.Sprintf("%v", flagValue.Value)),
 	)
 
-	metadata := flagValue.Metadata
+	// copy the metadata: we add keys to it and the map must not be shared with the flag.
+	metadata := maps.Clone(flagValue.Metadata)
 	if flagValue.Cacheable {
 		if metadata == nil {
 			metadata = make(map[string]any)
 		}
 		metadata["gofeatureflag_cacheable"] = true
 	}
+	helper.MarkUncacheableOnAudience(c, metadata)
 
 	return c.JSON(http.StatusOK, model.OFREPEvaluateSuccessResponse{
 		Key:      flagKey,
@@ -186,7 +189,7 @@ func (h *EvaluateCtrl) BulkEvaluate(c *echo.Context) error {
 		Flags: make([]model.OFREPFlagBulkEvaluateSuccessResponse, 0),
 	}
 	tracer := otel.GetTracerProvider().Tracer(configfile.OtelTracerName)
-	_, span := tracer.Start(c.Request().Context(), "AllFlagsState")
+	ctx, span := tracer.Start(c.Request().Context(), "AllFlagsState")
 	defer span.End()
 
 	flagset, httpErr := helper.FlagSet(h.flagsetManager, helper.APIKey(c))
@@ -197,13 +200,14 @@ func (h *EvaluateCtrl) BulkEvaluate(c *echo.Context) error {
 	var allFlagsResp flagstate.AllFlags
 	if len(evalCtx.ExtractGOFFProtectedFields().FlagList) > 0 {
 		// if we have a list of flags to evaluate in the evaluation context, we evaluate only those flags.
-		allFlagsResp = flagset.GetFlagStates(evalCtx, evalCtx.ExtractGOFFProtectedFields().FlagList)
+		allFlagsResp = flagset.GetFlagStatesWithContext(ctx, evalCtx, evalCtx.ExtractGOFFProtectedFields().FlagList)
 	} else {
-		allFlagsResp = flagset.AllFlagsState(evalCtx)
+		allFlagsResp = flagset.AllFlagsStateWithContext(ctx, evalCtx)
 	}
 	flagNames := make([]string, 0, len(allFlagsResp.GetFlags()))
 	for key, val := range allFlagsResp.GetFlags() {
 		flagNames = append(flagNames, key)
+		helper.MarkUncacheableOnAudience(c, val.Metadata)
 		value := val.Value
 		if val.Reason == flag.ReasonError {
 			value = nil

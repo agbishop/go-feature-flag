@@ -45,6 +45,8 @@ type GoFeatureFlag struct {
 	retrieverManager          *retriever.Manager
 	// evalExporterWg is a wait group to wait for the evaluation exporter to finish the export before closing GOFF
 	evalExporterWg sync.WaitGroup
+	// audiences is nil when no audience is configured.
+	audiences *audiencesRuntime
 }
 
 // ff is the default object for go-feature-flag
@@ -63,20 +65,29 @@ func New(config Config) (*GoFeatureFlag, error) {
 		evalExporterWg: sync.WaitGroup{},
 	}
 
+	if config.Audiences != nil {
+		if err := config.Audiences.Config.IsValid(); err != nil {
+			return nil, err
+		}
+	}
+
 	if config.Offline {
 		// in case we are in offline mode, we don't need to initialize the cache since we will not use it.
 		goFF.config.internalLogger.Info("GO Feature Flag is in offline mode")
 		return goFF, nil
 	}
 
-	retrieverManager, err := initializeRetrieverManager(config)
+	goFF.audiences = newAudiencesRuntime(config)
+	retrieverManager, err := initializeRetrieverManager(config, goFF.audiences)
 	if err != nil && (goFF.retrieverManager == nil || !config.StartWithRetrieverError) {
+		goFF.audiences.close(config.Context)
 		return nil, fmt.Errorf(
 			"impossible to initialize the retrievers, please check your configuration: %v",
 			err,
 		)
 	}
 	goFF.retrieverManager = retrieverManager
+	goFF.audiences.checkInitialFlags(retrieverManager)
 	goFF.featureEventDataExporter, goFF.trackingEventDataExporter = initializeDataExporters(
 		config, goFF.config.internalLogger)
 	config.internalLogger.Debug("GO Feature Flag is initialized")
@@ -84,14 +95,17 @@ func New(config Config) (*GoFeatureFlag, error) {
 }
 
 // initializeNotificationService is a function that will initialize the notification service with the notifiers
-func initializeNotificationService(config Config) notification.Service {
+func initializeNotificationService(config Config, aud *audiencesRuntime) notification.Service {
 	notifiers := config.Notifiers
+	if aud != nil {
+		notifiers = append(notifiers, aud.existenceNotifier())
+	}
 	notifiers = append(notifiers, &logsnotifier.Notifier{Logger: config.internalLogger})
 	return notification.NewService(notifiers)
 }
 
 // initializeRetrieverManager is a function that will initialize the retriever manager with the retrievers
-func initializeRetrieverManager(config Config) (*retriever.Manager, error) {
+func initializeRetrieverManager(config Config, aud *audiencesRuntime) (*retriever.Manager, error) {
 	retrievers, err := config.GetRetrievers()
 	if err != nil {
 		return nil, err
@@ -106,7 +120,7 @@ func initializeRetrieverManager(config Config) (*retriever.Manager, error) {
 		Name:                            config.Name,
 	}
 
-	notificationService := initializeNotificationService(config)
+	notificationService := initializeNotificationService(config, aud)
 	// init internal cache
 	cacheMngr := cache.New(
 		notificationService,
@@ -159,6 +173,7 @@ func initializeDataExporters(config Config, logger *fflog.FFLogger) (
 // Close wait until thread are done
 func (g *GoFeatureFlag) Close() {
 	if g != nil {
+		g.audiences.close(g.config.Context)
 		if g.retrieverManager != nil {
 			_ = g.retrieverManager.Shutdown(g.config.Context)
 		}
