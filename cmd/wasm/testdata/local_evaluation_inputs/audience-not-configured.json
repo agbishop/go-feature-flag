@@ -1,0 +1,25 @@
+{
+  "flagKey": "TEST",
+  "flag": {
+    "variations": {
+      "A": "variation-a",
+      "B": "variation-b"
+    },
+    "targeting": [
+      {
+        "name": "beta audience rule",
+        "query": "targetingKey in audience(\"beta\")",
+        "variation": "A"
+      }
+    ],
+    "defaultRule": {
+      "variation": "B"
+    }
+  },
+  "evalContext": {
+    "targetingKey": "random-key"
+  },
+  "flagContext": {
+    "defaultSdkValue": "default"
+  }
+}

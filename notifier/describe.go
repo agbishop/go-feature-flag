@@ -272,6 +272,9 @@ func (d *describer) rule(label string, before, after flag.Rule, isDefault bool) 
 	}
 	d.unusedFields(label, before, after)
 	d.toggle(label, "disable", before.Disable, after.Disable, false, "disabled"+ignored, "enabled"+ignored)
+	if oldOnError, newOnError := before.GetOnError(), after.GetOnError(); oldOnError != newOnError {
+		d.addf("%s onError changed from %s to %s%s", label, d.code(oldOnError), d.code(newOnError), ignored)
+	}
 }
 
 // unusedFields describes changes to fields a rule does not serve from, before or after the change.

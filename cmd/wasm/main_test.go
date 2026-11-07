@@ -32,6 +32,11 @@ func Test_localEvaluation(t *testing.T) {
 			inputLocation: "testdata/local_evaluation_inputs/missing-targeting-key.json",
 			wantLocation:  "testdata/local_evaluation_outputs/missing-targeting-key.json",
 		},
+		{
+			name:          "Test with an audience query and no audience store configured",
+			inputLocation: "testdata/local_evaluation_inputs/audience-not-configured.json",
+			wantLocation:  "testdata/local_evaluation_outputs/audience-not-configured.json",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

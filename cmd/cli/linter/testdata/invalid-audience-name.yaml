@@ -1,0 +1,9 @@
+audience-flag:
+  variations:
+    A: false
+    B: true
+  targeting:
+    - query: targetingKey in audience("goff_aud_beta")
+      variation: B
+  defaultRule:
+    variation: A

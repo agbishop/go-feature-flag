@@ -111,3 +111,26 @@ func TestLinter_Lint(t *testing.T) {
 		})
 	}
 }
+
+func TestLinter_Lint_Audience(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string
+		wantErr bool
+	}{
+		{name: "valid audience flag", file: "testdata/valid-audience.yaml", wantErr: false},
+		{name: "audience in defaultRule", file: "testdata/invalid-audience-default-rule.yaml", wantErr: true},
+		{name: "reserved audience name", file: "testdata/invalid-audience-name.yaml", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := Linter{InputFile: tt.file, InputFormat: "yaml"}
+			errs := l.Lint()
+			if tt.wantErr {
+				assert.NotEmpty(t, errs)
+			} else {
+				assert.Empty(t, errs)
+			}
+		})
+	}
+}

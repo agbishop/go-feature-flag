@@ -296,6 +296,13 @@ func TestDescribeChanges(t *testing.T) {
 			},
 		},
 		{
+			name: "should describe an onError change on a rule",
+			update: func(f *flag.InternalFlag) {
+				(*f.Rules)[1].OnError = testconvert.String(flag.OnErrorMatch)
+			},
+			want: []string{"Targeting rule `beta` onError changed from `skip` to `match`"},
+		},
+		{
 			name: "should keep a rule named like a position apart from the unnamed rule at that position",
 			setup: func(f *flag.InternalFlag) {
 				f.Rules = &[]flag.Rule{
@@ -675,9 +682,11 @@ func TestDescribeChanges_coversEveryField(t *testing.T) {
 				"Rules", "Scheduled", "TrackEvents", "Variations", "Version"},
 		},
 		{
-			name:    "rule",
-			typ:     reflect.TypeFor[flag.Rule](),
-			handled: []string{"Disable", "Name", "Percentages", "ProgressiveRollout", "Query", "VariationResult"},
+			name: "rule",
+			typ:  reflect.TypeFor[flag.Rule](),
+			handled: []string{
+				"Disable", "Name", "OnError", "Percentages", "ProgressiveRollout", "Query", "VariationResult",
+			},
 		},
 		{name: "progressive rollout", typ: reflect.TypeFor[flag.ProgressiveRollout](), handled: []string{"End", "Initial"}},
 		{

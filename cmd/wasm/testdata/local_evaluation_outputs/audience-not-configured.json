@@ -1,0 +1,13 @@
+{
+  "trackEvents": true,
+  "variationType": "B",
+  "failed": false,
+  "version": "",
+  "reason": "DEFAULT",
+  "errorCode": "",
+  "value": "variation-b",
+  "cacheable": false,
+  "metadata": {
+    "gofeatureflag_audienceStatus": "NOT_CONFIGURED"
+  }
+}

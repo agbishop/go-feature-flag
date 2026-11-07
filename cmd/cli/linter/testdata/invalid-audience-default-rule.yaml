@@ -1,0 +1,10 @@
+audience-flag:
+  variations:
+    A: false
+    B: true
+  targeting:
+    - query: key eq "random-key"
+      variation: B
+  defaultRule:
+    query: targetingKey in audience("beta")
+    variation: A
