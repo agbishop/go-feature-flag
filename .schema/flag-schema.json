@@ -176,6 +176,15 @@
                     "type": "boolean",
                     "title": "disable",
                     "description": "Indicates that this rule is disabled."
+                },
+                "onError": {
+                    "type": "string",
+                    "enum": [
+                        "skip",
+                        "match"
+                    ],
+                    "title": "onError",
+                    "description": "Behavior when an audience of the query cannot be resolved. skip (default) means the rule does not match and match means unknown audiences are considered as member."
                 }
             },
             "additionalProperties": false,

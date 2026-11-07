@@ -37,7 +37,7 @@ func Test_constructMetadataParallel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := constructMetadata(sharedMetadata, &tt.wantEvaluatedRuleName)
+			got := constructMetadata(sharedMetadata, &tt.wantEvaluatedRuleName, "")
 			assert.Equal(t, tt.wantEvaluatedRuleName, got["evaluatedRuleName"])
 		})
 	}
@@ -92,7 +92,7 @@ func Test_ConstructMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := constructMetadata(tt.flagMetadata, tt.ruleName)
+			got := constructMetadata(tt.flagMetadata, tt.ruleName, "")
 			assert.Equal(t, tt.want, got)
 		})
 	}

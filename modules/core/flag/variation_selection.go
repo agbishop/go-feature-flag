@@ -17,4 +17,7 @@ type variationSelection struct {
 
 	// cacheable is set to true if a provider/SDK can cache the value
 	cacheable bool
+
+	// audienceStatus is the audience status of the evaluation, empty if no audience was evaluated.
+	audienceStatus string
 }

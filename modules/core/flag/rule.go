@@ -48,6 +48,28 @@ type Rule struct {
 
 	// Disable indicates that this rule is disabled.
 	Disable *bool `json:"disable,omitempty" yaml:"disable,omitempty" toml:"disable,omitempty" jsonschema:"title=disable,description=Indicates that this rule is disabled."` // nolint: lll
+
+	// OnError defines what happens when an audience used by the query cannot be resolved
+	// (store error, audience not configured, missing attribute): skip (default) or match.
+	OnError *string `json:"onError,omitempty" yaml:"onError,omitempty" toml:"onError,omitempty" jsonschema:"title=onError,description=Behavior when an audience of the query cannot be resolved. skip (default) means the rule does not match and match means unknown audiences are considered as member.,enum=skip,enum=match"` // nolint: lll
+}
+
+const (
+	// OnErrorSkip makes the rule not match when an audience cannot be resolved (default).
+	OnErrorSkip = "skip"
+	// OnErrorMatch makes the rule consider unresolved audiences as member, when the outcome of the
+	// query depends on them. This also applies when audiences are not configured (nil membership,
+	// NOT_CONFIGURED, e.g. WASM / in-process evaluation): it is intentional, so a deny rule keeps
+	// matching when the membership cannot be resolved.
+	OnErrorMatch = "match"
+)
+
+// GetOnError returns the onError behavior of the rule, "skip" by default.
+func (r *Rule) GetOnError() string {
+	if r.OnError == nil || *r.OnError == "" {
+		return OnErrorSkip
+	}
+	return *r.OnError
 }
 
 // RequiresBucketing checks if this rule requires a bucketing key for evaluation
@@ -89,8 +111,8 @@ func (r *Rule) evaluate(key string, queryCtx *queryContext, flagName string, isD
 	}
 
 	// Check if the rule applies for this user
-	ruleApply := isDefault || evaluateRule(r.GetTrimmedQuery(), r.GetQueryFormat(), queryCtx)
-	if !ruleApply || (!isDefault && r.IsDisable()) {
+	// A disabled rule never applies: check it first so it does no query (nor audience) work.
+	if !isDefault && (r.IsDisable() || !r.queryApplies(queryCtx)) {
 		return "", &internalerror.RuleNotApplyError{Context: ctx}
 	}
 	if r.ProgressiveRollout != nil {
@@ -120,11 +142,19 @@ type queryContext struct {
 	ctx                  ffcontext.Context
 	parsedEvalCtxAsMap   map[string]any
 	parsedEvalCtxAsBytes []byte
+
+	// membership is the audience store answer, nil when audiences are not configured.
+	membership AudienceMembership
+	// audienceStatus is the worst audience status seen during this evaluation,
+	// empty when no audience term has been evaluated.
+	audienceStatus string
 }
 
 func (q *queryContext) mapOnce() map[string]any {
 	if q.parsedEvalCtxAsMap == nil {
 		q.parsedEvalCtxAsMap = utils.ContextToMap(q.ctx)
+		// the reserved attributes can only be injected by the evaluation (anti-spoofing).
+		stripAudienceKeys(q.parsedEvalCtxAsMap)
 	}
 	return q.parsedEvalCtxAsMap
 }
@@ -137,6 +167,111 @@ func (q *queryContext) jsonOnce() ([]byte, error) {
 		}
 	}
 	return q.parsedEvalCtxAsBytes, nil
+}
+
+// maxEnumeratedUnknownTerms is the maximum number of unknown audience terms for which the
+// outcome of the query is checked under every true/false assignment (2^n evaluations).
+const maxEnumeratedUnknownTerms = 4
+
+// queryApplies evaluates the query of the rule. Audience terms are rewritten into conditions on
+// reserved attributes, whose values are injected in a copy of the shared context map (the shared
+// map and its JSON form are never modified, so other rules are not impacted).
+//
+// A term is unknown when its membership cannot be resolved (store error, audience not configured
+// i.e. nil membership as in WASM / in-process, missing or non-string attribute). When the rule has
+// unknown terms, the rewritten query is evaluated under every true/false assignment of the
+// unknown terms. If the outcome is the same for all of them, it does not depend on the unknown
+// terms and it is used as is (onError is not consulted), e.g. `plan eq "pro" or u in audience("a")`
+// for a pro user. Otherwise onError decides: skip (default) means the rule does not match and
+// match means the unknown terms are considered as member. This last behavior is intentional,
+// including when the membership is nil (NOT_CONFIGURED): a deny rule with onError=match must keep
+// matching when the audience cannot be resolved (fail closed).
+func (r *Rule) queryApplies(queryCtx *queryContext) bool {
+	if r.Query == nil || !mayContainAudienceRaw(*r.Query) {
+		// no audience: same path as a plain query.
+		return evaluateRule(r.GetTrimmedQuery(), r.GetQueryFormat(), queryCtx)
+	}
+	query := r.GetTrimmedQuery()
+	format := r.GetQueryFormat()
+	if query == "" {
+		return true
+	}
+	compiled, err := CompileAudienceQuery(query, format)
+	if err != nil {
+		slog.Error("error while compiling the audience query",
+			slog.String("query", query), slog.Any("error", err))
+		return false
+	}
+	if !compiled.HasAudience() {
+		return evaluateRule(query, format, queryCtx)
+	}
+
+	base := queryCtx.mapOnce()
+	injected := make(map[string]any, len(base)+len(compiled.Terms))
+	for k, v := range base {
+		injected[k] = v
+	}
+	var unknown []string
+	for _, term := range compiled.Terms {
+		member, known := queryCtx.resolveTerm(base, term)
+		if !known {
+			unknown = append(unknown, term.Key)
+		}
+		injected[term.Key] = member
+	}
+	eval := func() bool {
+		return evaluateRule(compiled.Query, format, &queryContext{ctx: queryCtx.ctx, parsedEvalCtxAsMap: injected})
+	}
+	if len(unknown) == 0 {
+		return eval()
+	}
+
+	if len(unknown) <= maxEnumeratedUnknownTerms {
+		var first, differ bool
+		for mask := 0; mask < 1<<len(unknown) && !differ; mask++ {
+			for i, k := range unknown {
+				injected[k] = mask&(1<<i) != 0
+			}
+			res := eval()
+			if mask == 0 {
+				first = res
+			} else if res != first {
+				differ = true
+			}
+		}
+		if !differ {
+			return first
+		}
+	}
+
+	// the outcome depends on the unknown terms: onError decides.
+	if r.GetOnError() != OnErrorMatch {
+		return false
+	}
+	for _, k := range unknown {
+		injected[k] = true
+	}
+	return eval()
+}
+
+// resolveTerm returns the membership of the term and if the answer is known.
+// It also updates the audience status of the evaluation.
+func (q *queryContext) resolveTerm(ctxMap map[string]any, term AudienceTerm) (member, known bool) {
+	if q.membership == nil {
+		q.audienceStatus = worstAudienceStatus(q.audienceStatus, AudienceStatusNotConfigured)
+		return false, false
+	}
+	q.audienceStatus = worstAudienceStatus(q.audienceStatus, AudienceStatusHealthy)
+	value, ok := AudienceAttributeValue(ctxMap, term.Attribute)
+	if !ok {
+		return false, false
+	}
+	res, found := q.membership[AudienceLookup{List: term.List, Value: value}]
+	if !found || res.Err {
+		q.audienceStatus = worstAudienceStatus(q.audienceStatus, AudienceStatusStoreError)
+		return false, false
+	}
+	return res.Member, true
 }
 
 func evaluateRule(query string, queryFormat QueryFormat, queryCtx *queryContext) (success bool) {
@@ -343,6 +478,10 @@ func (r *Rule) MergeRules(updatedRule Rule) {
 
 	if updatedRule.Query != nil {
 		r.Query = updatedRule.Query
+	}
+
+	if updatedRule.OnError != nil {
+		r.OnError = updatedRule.OnError
 	}
 
 	if updatedRule.VariationResult != nil {

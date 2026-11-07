@@ -107,7 +107,7 @@ func (f *InternalFlag) Value(
 		}
 	}
 
-	variationSelection, err := flag.selectVariation(flagName, key, evaluationCtx)
+	variationSelection, err := flag.selectVariation(flagName, key, evaluationCtx, flagContext.AudienceMembership)
 	if err != nil {
 		return flagContext.DefaultSdkValue,
 			ResolutionDetails{
@@ -125,7 +125,8 @@ func (f *InternalFlag) Value(
 		RuleIndex: variationSelection.ruleIndex,
 		RuleName:  variationSelection.ruleName,
 		Cacheable: variationSelection.cacheable,
-		Metadata:  constructMetadata(flag.GetMetadata(), variationSelection.ruleName),
+		Metadata: constructMetadata(
+			flag.GetMetadata(), variationSelection.ruleName, variationSelection.audienceStatus),
 	}
 }
 
@@ -154,16 +155,21 @@ func selectEvaluationReason(
 
 func (f *InternalFlag) isCacheable() bool {
 	isDynamic := (f.Scheduled != nil && len(*f.Scheduled) > 0) || f.Experimentation != nil
-	return !isDynamic
+	if isDynamic {
+		return false
+	}
+	// the result depends on the audience membership, which can change at any time.
+	return !f.hasAudience()
 }
 
 // selectVariation is doing the magic to select the variation that should be used for this specific user
 // to always affect the user to the same segment we are using a hash of the flag name + key
 func (f *InternalFlag) selectVariation(
-	flagName string, key string, ctx ffcontext.Context) (*variationSelection, error) {
+	flagName string, key string, ctx ffcontext.Context, membership AudienceMembership,
+) (*variationSelection, error) {
 	hasRule := len(f.GetRules()) != 0
 	// Shared by all the rules below: the context is converted to a map at most once.
-	queryCtx := &queryContext{ctx: ctx}
+	queryCtx := &queryContext{ctx: ctx, membership: membership}
 	// Check all targeting in order, the first to match will be the one used.
 	if hasRule {
 		for ruleIndex, target := range f.GetRules() {
@@ -182,6 +188,8 @@ func (f *InternalFlag) selectVariation(
 				ruleIndex: &ruleIndex,
 				ruleName:  f.GetRules()[ruleIndex].Name,
 				cacheable: f.isCacheable() && target.ProgressiveRollout == nil,
+
+				audienceStatus: queryCtx.audienceStatus,
 			}, err
 		}
 	}
@@ -200,6 +208,8 @@ func (f *InternalFlag) selectVariation(
 		name:      variationName,
 		reason:    reason,
 		cacheable: f.isCacheable() && f.GetDefaultRule().ProgressiveRollout == nil,
+
+		audienceStatus: queryCtx.audienceStatus,
 	}, nil
 }
 
@@ -339,6 +349,31 @@ func (f *InternalFlag) IsValid() error {
 		}
 	}
 
+	return f.validateScheduledAudience()
+}
+
+// validateScheduledAudience validates the audience usage of the scheduled steps.
+// Scheduled steps are otherwise not validated, only the audience specific checks are done here
+// (compilation of the audience queries, no audience in the defaultRule, valid onError).
+func (f *InternalFlag) validateScheduledAudience() error {
+	if f.Scheduled == nil {
+		return nil
+	}
+	for i := range *f.Scheduled {
+		step := &(*f.Scheduled)[i]
+		if step.Rules != nil {
+			for j := range *step.Rules {
+				if err := (&(*step.Rules)[j]).validateAudience(false); err != nil {
+					return fmt.Errorf("scheduled step %d, rule %d: %w", i, j, err)
+				}
+			}
+		}
+		if step.DefaultRule != nil {
+			if err := step.DefaultRule.validateAudience(true); err != nil {
+				return fmt.Errorf("scheduled step %d, defaultRule: %w", i, err)
+			}
+		}
+	}
 	return nil
 }
 

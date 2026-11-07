@@ -11,6 +11,10 @@ type Context struct {
 
 	// DefaultSdkValue is the default value of the SDK when calling the variation.
 	DefaultSdkValue any `json:"defaultSdkValue,omitempty"`
+
+	// AudienceMembership contains the answers of the audience store for this evaluation.
+	// nil means audiences are not configured. It is never serialized.
+	AudienceMembership AudienceMembership `json:"-" yaml:"-"`
 }
 
 // AddIntoEvaluationContextEnrichment adds a key and value to the evaluation context enrichment.

@@ -121,11 +121,48 @@ func (r *Rule) validateVariationResult(variations map[string]*any) error {
 	return nil
 }
 
+// validateAudience does only the audience specific validation of a rule: the onError value,
+// the compilation of the audience terms and no audience in the defaultRule.
+// It doesn't validate the rest of the query.
+func (r *Rule) validateAudience(defaultRule bool) error {
+	if !defaultRule && r.IsDisable() {
+		return nil
+	}
+	if oe := r.GetOnError(); oe != OnErrorSkip && oe != OnErrorMatch {
+		return fmt.Errorf("invalid onError %q: should be %q or %q", oe, OnErrorSkip, OnErrorMatch)
+	}
+	if r.Query == nil || !mayContainAudienceRaw(*r.Query) {
+		return nil
+	}
+	compiled, err := CompileAudienceQuery(r.GetTrimmedQuery(), r.GetQueryFormat())
+	if err != nil {
+		return err
+	}
+	if defaultRule && compiled.HasAudience() {
+		return fmt.Errorf("audience can't be used in the defaultRule")
+	}
+	return nil
+}
+
 // isQueryValid validates the query configuration of the rule.
 // It checks that the query is not empty and that the query format is valid.
 // The query format can be either JSONLogic or Nikunjy.
 func (r *Rule) isQueryValid(defaultRule bool) error {
+	if oe := r.GetOnError(); oe != OnErrorSkip && oe != OnErrorMatch {
+		return fmt.Errorf("invalid onError %q: should be %q or %q", oe, OnErrorSkip, OnErrorMatch)
+	}
+
 	if defaultRule {
+		// audience can't be used in the default rule.
+		if r.Query != nil {
+			compiled, err := CompileAudienceQuery(r.GetTrimmedQuery(), r.GetQueryFormat())
+			if err != nil {
+				return err
+			}
+			if compiled.HasAudience() {
+				return fmt.Errorf("audience can't be used in the defaultRule")
+			}
+		}
 		return nil
 	}
 
@@ -133,15 +170,20 @@ func (r *Rule) isQueryValid(defaultRule bool) error {
 		return fmt.Errorf("each targeting should have a query")
 	}
 
-	// Validate the query with the parser
+	compiled, err := CompileAudienceQuery(r.GetTrimmedQuery(), r.GetQueryFormat())
+	if err != nil {
+		return err
+	}
+
+	// Validate the rewritten query with the parser
 	switch r.GetQueryFormat() {
 	case JSONLogicQueryFormat:
-		if !jsonlogic.IsValid(strings.NewReader(r.GetQuery())) {
+		if !jsonlogic.IsValid(strings.NewReader(compiled.Query)) {
 			return fmt.Errorf("invalid jsonlogic query")
 		}
 		return nil
 	default:
-		return validateNikunjyQuery(r.GetTrimmedQuery())
+		return validateNikunjyQuery(compiled.Query)
 	}
 }
 
